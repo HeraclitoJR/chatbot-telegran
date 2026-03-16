@@ -1,0 +1,323 @@
+{
+  "name": "Telegram Weather Bot with Gemini Fallback",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "id": "855de838-1d44-438d-ad61-2d0510a92d8f",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1,
+      "position": [
+        -880,
+        160
+      ],
+      "webhookId": "86def0e7-2739-4d85-ae8b-0c86385989cd",
+      "credentials": {
+        "telegramApi": {
+          "id": "sOfrVFd2lKR3k3q6",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const text = $json.message.text || \"\";\n\nfunction removeAccents(str) {\n  return str.normalize(\"NFD\").replace(/[\\u0300-\\u036f]/g, \"\");\n}\n\nlet cleaned = text.trim();\ncleaned = removeAccents(cleaned);\ncleaned = cleaned.toLowerCase();\n\nlet cityQuery = \"\";\n\nif (cleaned.includes(\",\")) {\n  const parts = cleaned.split(\",\").map(p => p.trim());\n\n  if (parts.length === 2) {\n    cityQuery = `${parts[0]},${parts[1]},br`;\n  }\n\n  if (parts.length === 3) {\n    cityQuery = `${parts[0]},${parts[1]},${parts[2]}`;\n  }\n\n} else {\n  cityQuery = `${cleaned},br`;\n}\n\nreturn [{\n  chat_id: $json.message.chat.id,\n  city_raw: text,\n  queue: cityQuery\n}];"
+      },
+      "id": "6a45e941-c406-42bb-af4d-67cabf973530",
+      "name": "Input Processor",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -656,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.openweathermap.org/data/2.5/weather",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{$json.queue}}"
+            },
+            {
+              "name": "units",
+              "value": "metric"
+            },
+            {
+              "name": "lang",
+              "value": "pt_br"
+            },
+            {
+              "name": "appid",
+              "value": "={{$env[\"OPENWEATHER_API_KEY\"]}}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "d703e65f-d304-4fb2-8385-a7cef58ddaee",
+      "name": "OpenWeather Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -448,
+        160
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "d588322e-485c-4f91-ad76-f627806495b1",
+              "leftValue": "={{ $json.statusCode }}",
+              "rightValue": 200,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3b4a46f5-f101-4641-870b-04aa60943535",
+      "name": "Validate Weather Response",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$node[\"Input Processor\"].json.chat_id}}",
+        "text": "❌ Cidade não encontrada. Use o formato: Cidade, UF, BR",
+        "additionalFields": {
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "99266df1-1f7f-4e08-a06c-ff9c3468f6f4",
+      "name": "Telegram Error Message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        -32,
+        320
+      ],
+      "webhookId": "81106b18-07a2-4586-8871-174651e02776",
+      "credentials": {
+        "telegramApi": {
+          "id": "sOfrVFd2lKR3k3q6",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body;\n\nconst city = body.name;\nconst temp = Math.round(body.main.temp);\nconst feels = Math.round(body.main.feels_like);\nconst humidity = body.main.humidity;\nconst description = body.weather[0].description;\n\nreturn [{\n  chat_id: $node[\"Input Processor\"].json.chat_id,\n  city,\n  temp,\n  feels,\n  humidity,\n  description,\n  fallback_message: `🌤️ Clima em <b>${city}</b>:\\n\\nTemperatura: ${temp}°C\\nSensação térmica: ${feels}°C\\nCondição: ${description}\\nUmidade: ${humidity}%`\n}];"
+      },
+      "id": "a392ca69-8632-48d0-b10d-8aceda433490",
+      "name": "Round Temperature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -32,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const geminiText =\n  $json.text ||\n  $json.output ||\n  $json.candidates?.[0]?.content?.parts?.[0]?.text ||\n  null;\n\nconst city = $node[\"Round Temperature\"].json.city;\nconst chat_id = $node[\"Round Temperature\"].json.chat_id;\nconst fallback = $node[\"Round Temperature\"].json.fallback_message;\n\nif (geminiText) {\n  return [\n    {\n      chat_id,\n      message: `🌤️ <b>${city}</b>\\n\\n${geminiText}`,\n    },\n  ];\n}\n\nreturn [\n  {\n    chat_id,\n    message: fallback,\n  },\n];"
+      },
+      "id": "f37b9d16-5f3c-47fe-b0f0-bf890cbbbedc",
+      "name": "Gemini Fallback Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$json.chat_id}}",
+        "text": "={{$json.message}}",
+        "additionalFields": {
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "938b5448-6040-459c-9963-b2e595d9a4b6",
+      "name": "Telegram Send Message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        672,
+        -32
+      ],
+      "webhookId": "a8db429c-d8b5-4b93-9671-22c90f79fb56",
+      "credentials": {
+        "telegramApi": {
+          "id": "sOfrVFd2lKR3k3q6",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-flash",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-flash"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Deixe esta mensagem mais natural e amigavel para um chatbot do telegran:\n\n\nMensagem:\n{{$json.message}}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        128,
+        -32
+      ],
+      "id": "84e973a1-8071-4eba-a5b3-bdef8fb6052c",
+      "name": "Message a model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "tK51JBZ4Cad7WxkW",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Input Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Processor": {
+      "main": [
+        [
+          {
+            "node": "OpenWeather Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenWeather Request": {
+      "main": [
+        [
+          {
+            "node": "Validate Weather Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Weather Response": {
+      "main": [
+        [
+          {
+            "node": "Round Temperature",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram Error Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Fallback Handler": {
+      "main": [
+        [
+          {
+            "node": "Telegram Send Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Round Temperature": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Gemini Fallback Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "1d2be8d4-202a-400f-8aa9-b0327a579566",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "20a00a06205905c455860a960c21ee57534dd39c36ea2f3d9f1da6987240f6b2"
+  },
+  "id": "6bnZRRHuffBaEjXG",
+  "tags": []
+}
